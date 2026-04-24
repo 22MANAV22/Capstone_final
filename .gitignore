@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+
+# Airflow
+airflow.db
+airflow.cfg
+logs/
+*.pid
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keys
+*.pem
+*.key
+
+# Env files
+.env
+.env.local

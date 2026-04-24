@@ -1,4 +1,4 @@
-"""Make operators available."""
-from operators import SNSOperator, DatabricksOperator
+from operators.databricks_operator import DatabricksOperator
+from operators.sns_operator import SNSOperator
 
-__all__ = ['SNSOperator', 'DatabricksOperator']
+__all__ = ['DatabricksOperator', 'SNSOperator']

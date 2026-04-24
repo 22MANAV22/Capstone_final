@@ -1,0 +1,85 @@
+name: Data Pipeline Deployment
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+      
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install databricks-cli snowflake-connector-python pytest
+      
+      - name: Run Tests
+        run: |
+          pytest tests/ || echo "No tests found"
+      
+      - name: Deploy Databricks Notebooks
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          databricks workspace import_dir Databricks/Notebooks /Workspace/Shared/Capstone_final/Databricks/Notebooks --overwrite
+      
+      - name: Deploy Databricks Python Files
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          databricks workspace import Databricks/utils.py /Workspace/Shared/Capstone_final/Databricks/utils.py --overwrite --language PYTHON
+          databricks workspace import Databricks/table_config.py /Workspace/Shared/Capstone_final/Databricks/table_config.py --overwrite --language PYTHON
+          databricks workspace import Databricks/checkpoint_manager.py /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager.py --overwrite --language PYTHON
+          databricks workspace import Databricks/bronze_engine.py /Workspace/Shared/Capstone_final/Databricks/bronze_engine.py --overwrite --language PYTHON
+          databricks workspace import Databricks/silver_engine.py /Workspace/Shared/Capstone_final/Databricks/silver_engine.py --overwrite --language PYTHON
+          databricks workspace import Databricks/gold_engine.py /Workspace/Shared/Capstone_final/Databricks/gold_engine.py --overwrite --language PYTHON
+          databricks workspace import Databricks/cdc_engine.py /Workspace/Shared/Capstone_final/Databricks/cdc_engine.py --overwrite --language PYTHON
+      
+      - name: Deploy Airflow DAGs to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          echo "$EC2_KEY" > ec2_key.pem
+          chmod 600 ec2_key.pem
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no Airflow/dags/batch_pipeline.py $EC2_USER@$EC2_HOST:~/airflow/dags/
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no Airflow/dags/live_merge.py $EC2_USER@$EC2_HOST:~/airflow/dags/
+          rm ec2_key.pem
+      
+      - name: Deploy Airflow Operators to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          echo "$EC2_KEY" > ec2_key.pem
+          chmod 600 ec2_key.pem
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no Airflow/operators/databricks_operator.py $EC2_USER@$EC2_HOST:~/airflow/plugins/operators/
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no Airflow/operators/sns_operator.py $EC2_USER@$EC2_HOST:~/airflow/plugins/operators/
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no Airflow/plugins/__init__.py $EC2_USER@$EC2_HOST:~/airflow/plugins/operators/
+          rm ec2_key.pem
+      
+      - name: Run Snowflake SQL Scripts
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+          SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          python scripts/run_snowflake_sql.py

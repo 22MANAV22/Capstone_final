@@ -45,34 +45,24 @@ class CheckpointManager:
             return False
 
     def is_done(self, batch_number, stage):
-        """
-        Return True if this stage already completed successfully for this batch.
-        Returns False if the checkpoint file doesn't exist (normal on first run).
-        """
         path = self._path(batch_number, stage)
 
-        # Check existence first — avoids PATH_NOT_FOUND from spark.read
-        if not self._file_exists(path):
-            print(f"    No checkpoint found for batch_{batch_number}/{stage} — will run.")
-            return False
-
-        # File exists — read and parse it
         try:
-            df      = self.spark.read.text(path)
+            df = self.spark.read.text(path)  # 👈 try directly
             content = df.first()[0]
-            data    = json.loads(content)
+            data = json.loads(content)
+
             if data.get("status") == "completed":
                 completed_at = data.get("completed_at", "unknown time")
-                rows         = data.get("rows", 0)
+                rows = data.get("rows", 0)
+
                 print(f"    CHECKPOINT HIT: batch_{batch_number}/{stage}")
                 print(f"    Already completed at {completed_at} with {rows:,} rows.")
-                print(f"    Skipping. To force re-run:")
-                print(f"      CheckpointManager(spark).reset('{batch_number}')")
                 return True
-        except Exception as e:
-            # Checkpoint file exists but is corrupt or unreadable — treat as not done
-            print(f"    WARNING: Could not read checkpoint for batch_{batch_number}/{stage}: {e}")
-            print(f"    Treating as not completed — will re-run.")
+
+        except Exception:
+            print(f"    No checkpoint found for batch_{batch_number}/{stage} — will run.")
+            return False
 
         return False
 

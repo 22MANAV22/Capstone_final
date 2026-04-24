@@ -54,33 +54,50 @@ def read_delta(spark, s3_path):
     return spark.read.format("delta").load(s3_path)
 
 
+from delta.tables import DeltaTable
+
 def write_delta(df, s3_path, mode="overwrite", partition_by=None, catalog_table=None):
-    """
-    Write DataFrame to Delta and optionally register in catalog.
-    Drops stale catalog entry before saveAsTable — same fix as original engines.
-    """
     spark = df.sparkSession
 
-    if catalog_table:
-        spark.sql(f"DROP TABLE IF EXISTS {catalog_table}")
+    exists = path_exists(s3_path)
 
     writer = (
         df.write
         .format("delta")
         .mode(mode)
         .option("path", s3_path)
-        .option("overwriteSchema", "true")
+        .option("overwriteSchema", "true")   # ✅ important
     )
 
     if partition_by:
         writer = writer.partitionBy(partition_by)
 
-    if catalog_table:
-        writer.saveAsTable(catalog_table)
-    else:
+    # ✅ CASE 1: new table
+    if not exists:
+        if catalog_table:
+            writer.saveAsTable(catalog_table)
+        else:
+            writer.save(s3_path)
+
+    # ✅ CASE 2: already Delta
+    elif is_delta_table(spark, s3_path):
         writer.save(s3_path)
 
+        if catalog_table:
+            spark.sql(f"""
+                CREATE TABLE IF NOT EXISTS {catalog_table}
+                USING DELTA LOCATION '{s3_path}'
+            """)
 
+    # ❌ CASE 3: bad state
+    else:
+        raise Exception(f"""
+Path exists but is NOT a Delta table: {s3_path}
+
+👉 One-time fix:
+dbutils.fs.rm("{s3_path}", True)
+""")
+        
 def write_parquet(df, s3_path):
     """Write DataFrame to Parquet (for Snowflake COPY INTO)."""
     df.write.format("parquet").mode("overwrite").save(s3_path)
@@ -97,6 +114,21 @@ def register_catalog(spark, table_name, s3_path):
         f"USING DELTA LOCATION '{s3_path}'"
     )
 
+
+
+def path_exists(s3_path):
+    try:
+        dbutils.fs.ls(s3_path)
+        return True
+    except:
+        return False
+
+def is_delta_table(spark, path):
+    from delta.tables import DeltaTable
+    try:
+        return DeltaTable.isDeltaTable(spark, path)
+    except:
+        return False
 
 # ============================================================================
 # DATAFRAME UTILITIES

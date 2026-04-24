@@ -20,22 +20,37 @@ class BronzeEngine:
         self.checkpoint = CheckpointManager(spark)
 
     def _ingest_table(self, table_name, s3_source, batch_id, table_config, 
-                     write_mode="overwrite", partition=None):
-        """Generic table ingestion using utils."""
+                 write_mode="overwrite", partition=None):
+
         try:
             df = utils.read_csv(self.spark, s3_source)
             df = utils.apply_casts(df, table_config)
             df = utils.add_audit_columns(df, s3_source.split('/')[-1], batch_id)
-            
+
             s3_path = f"{S3_DELTA_BRONZE}/{table_name}"
-            utils.write_delta(df, s3_path, mode=write_mode, 
-                            partition_by=partition, 
-                            catalog_table=f"bronze.{table_name}")
-            
+            table_name_full = f"bronze.{table_name}"
+
+            # 🔥 NEW LOGIC (THIS FIXES YOUR ERROR)
+            path_exists = utils.path_exists(s3_path)
+            is_delta = utils.is_delta_table(self.spark, s3_path)
+
+            if path_exists and not is_delta:
+                print(f"⚠️ Non-delta data found at {s3_path}, cleaning...")
+                dbutils.fs.rm(s3_path, True)
+
+            # ✅ WRITE
+            utils.write_delta(
+                df,
+                s3_path,
+                mode=write_mode,
+                partition_by=partition,
+                catalog_table=table_name_full
+            )
+
             count = utils.get_row_count(df)
             self.results[table_name] = count
             utils.log_table(table_name, count, "ingested")
-            
+
         except Exception as e:
             utils.log_error(table_name, e)
             self.errors.append(table_name)
@@ -63,12 +78,84 @@ class BronzeEngine:
                              write_mode="append", partition="batch_id")
 
     def ingest_live(self):
-        """Live stream."""
+        """Live ingestion (robust + schema-safe)."""
         print("\n  Live stream:")
+
+        from pyspark.sql.functions import col, to_timestamp
+        from delta.tables import DeltaTable
+
         for name, cfg in TRANSACTIONAL_TABLES.items():
-            self._ingest_table(name, f"{S3_LIVE}/*{cfg['source_file']}", 
-                             "live_stream", cfg, 
-                             write_mode="append", partition="batch_id")
+            try:
+                print(f"\nProcessing live table: {name}")
+
+                # Read matching files
+                file_pattern = f"{S3_LIVE}/*{cfg['source_file']}*"
+
+                df = (self.spark.read
+                    .option("header", True)
+                    .option("inferSchema", False)
+                    .csv(file_pattern))
+
+                count = df.count()
+                print(f"Row count: {count}")
+
+                if count == 0:
+                    print(f"⚠️ No data found for {name}, skipping...")
+                    continue
+
+                # Apply transformations
+                df = utils.apply_casts(df, cfg)
+
+                # Schema enforcement
+                for col_name, dtype in cfg.get("schema", {}).items():
+                    if col_name in df.columns:
+                        if "timestamp" in dtype.lower():
+                            df = df.withColumn(col_name, to_timestamp(col(col_name)))
+                        elif dtype.lower() in ["int", "integer"]:
+                            df = df.withColumn(col_name, col(col_name).cast("int"))
+                        elif dtype.lower() in ["double", "float"]:
+                            df = df.withColumn(col_name, col(col_name).cast("double"))
+                        else:
+                            df = df.withColumn(col_name, col(col_name).cast(dtype))
+
+                # Add audit columns
+                df = utils.add_audit_columns(df, cfg['source_file'], "live_stream")
+
+                table_name_full = f"bronze.{name}"
+                s3_path = f"{S3_DELTA_BRONZE}/{name}"
+
+                # FIX: Check if Delta table exists at S3 path (not catalog)
+                if DeltaTable.isDeltaTable(self.spark, s3_path):
+                    print(f"Appending to existing Delta table: {table_name_full}")
+                    
+                    (df.write
+                    .format("delta")
+                    .mode("append")
+                    .option("mergeSchema", "false")
+                    .save(s3_path))
+                    
+                else:
+                    print(f"Creating new Delta table: {table_name_full}")
+                    
+                    # Drop stale catalog entry if exists
+                    self.spark.sql(f"DROP TABLE IF EXISTS {table_name_full}")
+                    
+                    (df.write
+                    .format("delta")
+                    .mode("overwrite")
+                    .option("overwriteSchema", "true")
+                    .option("path", s3_path)
+                    .partitionBy("batch_id")
+                    .saveAsTable(table_name_full))
+
+                # Logging
+                self.results[name] = count
+                utils.log_table(name, count, "live_ingested")
+
+            except Exception as e:
+                utils.log_error(name, e)
+                self.errors.append(name)
+
 
     def run(self, batch_number):
         """Main entry point."""
