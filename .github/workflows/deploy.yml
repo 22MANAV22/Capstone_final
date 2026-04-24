@@ -38,46 +38,57 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           databricks workspace import_dir Databricks/Notebooks /Workspace/Shared/Capstone_final/Databricks/Notebooks --overwrite
-      
+
       - name: Deploy Databricks Python Files
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          # Delete existing files — suppress errors if they don't exist yet
-          # Try both with and without .py suffix since old deploys may have left either
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/utils              2>/dev/null || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/table_config       2>/dev/null || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager 2>/dev/null || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/bronze_engine      2>/dev/null || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/silver_engine      2>/dev/null || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/gold_engine        2>/dev/null || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/cdc_engine         2>/dev/null || true
+          # Helper function: upload a local .py file as a RAW plain Python file (not a notebook)
+          # Uses the Workspace REST API with format=RAW so Databricks stores it as a .py file,
+          # not a notebook object. base64-encodes the content and POSTs to /api/2.0/workspace/import.
+          upload_py() {
+            local LOCAL_PATH=$1       # e.g. Databricks/utils.py
+            local REMOTE_PATH=$2      # e.g. /Workspace/Shared/.../utils.py  (include .py here for RAW)
 
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/utils.py              2>/dev/null || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/table_config.py       2>/dev/null || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager.py 2>/dev/null || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/bronze_engine.py      2>/dev/null || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/silver_engine.py      2>/dev/null || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/gold_engine.py        2>/dev/null || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/cdc_engine.py         2>/dev/null || true
+            echo "Uploading $LOCAL_PATH → $REMOTE_PATH"
 
-          echo "✅ Cleanup done, uploading fresh files..."
+            CONTENT=$(base64 -w 0 "$LOCAL_PATH")
 
-          # Upload fresh files
-          # Source path keeps .py (real file in repo)
-          # Destination path has NO .py — with SOURCE format, Databricks CLI adds .py automatically
-          # so the file lands as utils.py (one extension only)
-          databricks workspace import Databricks/utils.py              /Workspace/Shared/Capstone_final/Databricks/utils              --language PYTHON --format SOURCE --overwrite
-          databricks workspace import Databricks/table_config.py       /Workspace/Shared/Capstone_final/Databricks/table_config       --language PYTHON --format SOURCE --overwrite
-          databricks workspace import Databricks/checkpoint_manager.py /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager --language PYTHON --format SOURCE --overwrite
-          databricks workspace import Databricks/bronze_engine.py      /Workspace/Shared/Capstone_final/Databricks/bronze_engine      --language PYTHON --format SOURCE --overwrite
-          databricks workspace import Databricks/silver_engine.py      /Workspace/Shared/Capstone_final/Databricks/silver_engine      --language PYTHON --format SOURCE --overwrite
-          databricks workspace import Databricks/gold_engine.py        /Workspace/Shared/Capstone_final/Databricks/gold_engine        --language PYTHON --format SOURCE --overwrite
-          databricks workspace import Databricks/cdc_engine.py         /Workspace/Shared/Capstone_final/Databricks/cdc_engine         --language PYTHON --format SOURCE --overwrite
+            RESPONSE=$(curl -s -o /tmp/db_response.json -w "%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+              -H "Content-Type: application/json" \
+              "$DATABRICKS_HOST/api/2.0/workspace/import" \
+              -d "{
+                \"path\": \"$REMOTE_PATH\",
+                \"format\": \"RAW\",
+                \"language\": \"PYTHON\",
+                \"content\": \"$CONTENT\",
+                \"overwrite\": true
+              }")
 
-          echo "✅ Python files deployed successfully"
-      
+            if [ "$RESPONSE" -ne 200 ]; then
+              echo "❌ Failed to upload $LOCAL_PATH (HTTP $RESPONSE)"
+              cat /tmp/db_response.json
+              exit 1
+            fi
+
+            echo "✅ Uploaded $LOCAL_PATH successfully"
+          }
+
+          BASE=/Workspace/Shared/Capstone_final/Databricks
+
+          upload_py Databricks/utils.py              $BASE/utils.py
+          upload_py Databricks/table_config.py       $BASE/table_config.py
+          upload_py Databricks/checkpoint_manager.py $BASE/checkpoint_manager.py
+          upload_py Databricks/bronze_engine.py      $BASE/bronze_engine.py
+          upload_py Databricks/silver_engine.py      $BASE/silver_engine.py
+          upload_py Databricks/gold_engine.py        $BASE/gold_engine.py
+          upload_py Databricks/cdc_engine.py         $BASE/cdc_engine.py
+
+          echo "✅ All Python files deployed successfully"
+
       - name: Deploy Airflow DAGs to EC2
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
@@ -87,12 +98,10 @@ jobs:
           echo "$EC2_KEY_BASE64" | base64 -d > ec2_key.pem
           chmod 600 ec2_key.pem
           
-          # Create Astro directories if they don't exist
           echo "=== Creating Astro Airflow directories ==="
           ssh -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null $EC2_USER@$EC2_HOST \
             "mkdir -p ~/Capstone/airflow/dags ~/Capstone/airflow/plugins/operators"
           
-          # Deploy DAGs
           echo "=== Deploying DAGs ==="
           scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             Airflow/dags/batch_pipeline.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/dags/
