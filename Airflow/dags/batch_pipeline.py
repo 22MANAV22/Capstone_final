@@ -93,7 +93,7 @@ with DAG(
     schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    tags=["capstone", "batch", "production"],
+    tags=["capstone", "batch", "production","WINNER"],
 ) as dag:
     
     # ═══════════════════════════════════════════════════════════════════════
