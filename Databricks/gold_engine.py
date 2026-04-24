@@ -6,7 +6,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, count, sum as _sum, avg as _avg, datediff, when
 import utils
 from table_config import S3_DELTA_SILVER, S3_DELTA_GOLD, S3_SNOWFLAKE
-
+from pyspark.sql.functions import col, count, sum as _sum, avg as _avg, datediff, when, max, unix_timestamp, from_unixtime
 
 class GoldEngine:
 
@@ -96,18 +96,20 @@ class GoldEngine:
     def build_order_summary(self):
         """Build order summary aggregates."""
         fact = utils.read_delta(self.spark, f"{S3_DELTA_GOLD}/fact_order_items")
-        
-        df = fact.groupBy("order_id").agg(
+
+        df = fact.groupBy(
+            "order_id",
+            "order_status",
+            "purchase_timestamp",
+            "delivered_date"
+        ).agg(
             count("order_item_id").alias("total_items"),
             _sum("price").alias("total_price"),
             _sum("freight_value").alias("total_freight"),
             _sum("total_amount").alias("total_amount"),
-            col("order_status").alias("order_status"),
-            col("purchase_timestamp").alias("purchase_date"),
-            col("delivered_date").alias("delivered_date"),
             _avg("delivery_days").alias("delivery_days")
         )
-        
+
         self._write_gold(df, "order_summary")
 
     def build_customer_metrics(self):
@@ -117,8 +119,8 @@ class GoldEngine:
             count("order_id").alias("total_orders"),
             _sum("total_amount").alias("total_spent"),
             _avg("total_amount").alias("avg_order_value"),
-            col("purchase_timestamp").alias("last_order_date"),
             _avg("review_score").alias("avg_review_score"),
+            from_unixtime(max(unix_timestamp(col("purchase_timestamp")))).alias("last_order_date"),
         )
         self._write_gold(df, "customer_metrics")
 

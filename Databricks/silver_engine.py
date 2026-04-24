@@ -57,13 +57,16 @@ class SilverEngine:
         for table_name, config in tables_config.items():
             try:
                 df = utils.read_delta(self.spark, f"{S3_DELTA_BRONZE}/{table_name}")
-                df = df.filter(col("batch_id") == f"batch_{batch_number}")
+
+                # Only filter by batch_id if the column exists
+                # Reference tables ingested with batch_id="batch_1" always
+                if "batch_id" in df.columns:
+                    df = df.filter(col("batch_id") == f"batch_{batch_number}")
 
                 if utils.get_row_count(df) == 0:
-                    print(f"  {table_name}: no rows — skipping")
+                    print(f"  {table_name}: no rows for batch_{batch_number} — skipping")
                     continue
 
-                # CLEAN only — no DQ here
                 df = self._clean_table(df, config)
 
                 merge_keys = config.get("merge_keys", [])
@@ -71,7 +74,7 @@ class SilverEngine:
                     self._write_merge(df, table_name, merge_keys)
                 else:
                     utils.write_delta(df, f"{S3_DELTA_SILVER}/{table_name}",
-                                     catalog_table=f"silver.{table_name}")
+                                    catalog_table=f"silver.{table_name}")
                     count = utils.get_row_count(df)
                     self.results[table_name] = count
                     utils.log_table(table_name, count, "cleaned")
