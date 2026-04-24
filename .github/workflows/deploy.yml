@@ -44,52 +44,7 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          # Strip any trailing slash from host to avoid double-slash in URL
-          DB_HOST="${DATABRICKS_HOST%/}"
-
-          upload_py() {
-            local LOCAL_PATH=$1
-            local REMOTE_PATH=$2
-
-            echo "Uploading $LOCAL_PATH → $REMOTE_PATH"
-
-            CONTENT=$(base64 -w 0 "$LOCAL_PATH")
-
-            RESPONSE=$(curl -s -o /tmp/db_response.json -w "%{http_code}" \
-              -X POST \
-              -H "Authorization: Bearer $DATABRICKS_TOKEN" \
-              -H "Content-Type: application/json" \
-              "${DB_HOST}/api/2.0/workspace/import" \
-              -d "{
-                \"path\": \"$REMOTE_PATH\",
-                \"format\": \"RAW\",
-                \"language\": \"PYTHON\",
-                \"content\": \"$CONTENT\",
-                \"overwrite\": true
-              }")
-
-            echo "HTTP status: $RESPONSE"
-            cat /tmp/db_response.json
-
-            if [ "$RESPONSE" -ne 200 ]; then
-              echo "❌ Failed to upload $LOCAL_PATH (HTTP $RESPONSE)"
-              exit 1
-            fi
-
-            echo "✅ Uploaded $LOCAL_PATH successfully"
-          }
-
-          BASE=/Workspace/Shared/Capstone_final/Databricks
-
-          upload_py Databricks/utils.py              $BASE/utils.py
-          upload_py Databricks/table_config.py       $BASE/table_config.py
-          upload_py Databricks/checkpoint_manager.py $BASE/checkpoint_manager.py
-          upload_py Databricks/bronze_engine.py      $BASE/bronze_engine.py
-          upload_py Databricks/silver_engine.py      $BASE/silver_engine.py
-          upload_py Databricks/gold_engine.py        $BASE/gold_engine.py
-          upload_py Databricks/cdc_engine.py         $BASE/cdc_engine.py
-
-          echo "✅ All Python files deployed successfully"
+          python scripts/upload_to_databricks.py
 
       - name: Deploy Airflow DAGs to EC2
         env:
