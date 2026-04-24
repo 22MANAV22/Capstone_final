@@ -45,6 +45,16 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           # Delete existing files first to avoid type mismatch
+          # Use names WITHOUT .py — that is how Databricks stores SOURCE format files
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/utils || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/table_config || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/bronze_engine || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/silver_engine || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/gold_engine || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/cdc_engine || true
+
+          # Also delete the old double-extension files if they exist
           databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/utils.py || true
           databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/table_config.py || true
           databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager.py || true
@@ -52,15 +62,17 @@ jobs:
           databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/silver_engine.py || true
           databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/gold_engine.py || true
           databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/cdc_engine.py || true
-          
+
           # Upload fresh files
-          databricks workspace import Databricks/utils.py /Workspace/Shared/Capstone_final/Databricks/utils.py --language PYTHON --format SOURCE
-          databricks workspace import Databricks/table_config.py /Workspace/Shared/Capstone_final/Databricks/table_config.py --language PYTHON --format SOURCE
-          databricks workspace import Databricks/checkpoint_manager.py /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager.py --language PYTHON --format SOURCE
-          databricks workspace import Databricks/bronze_engine.py /Workspace/Shared/Capstone_final/Databricks/bronze_engine.py --language PYTHON --format SOURCE
-          databricks workspace import Databricks/silver_engine.py /Workspace/Shared/Capstone_final/Databricks/silver_engine.py --language PYTHON --format SOURCE
-          databricks workspace import Databricks/gold_engine.py /Workspace/Shared/Capstone_final/Databricks/gold_engine.py --language PYTHON --format SOURCE
-          databricks workspace import Databricks/cdc_engine.py /Workspace/Shared/Capstone_final/Databricks/cdc_engine.py --language PYTHON --format SOURCE
+          # Source path keeps .py (real file in repo)
+          # Destination path has NO .py — Databricks CLI adds it automatically for SOURCE format
+          databricks workspace import Databricks/utils.py             /Workspace/Shared/Capstone_final/Databricks/utils             --language PYTHON --format SOURCE
+          databricks workspace import Databricks/table_config.py      /Workspace/Shared/Capstone_final/Databricks/table_config      --language PYTHON --format SOURCE
+          databricks workspace import Databricks/checkpoint_manager.py /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager --language PYTHON --format SOURCE
+          databricks workspace import Databricks/bronze_engine.py     /Workspace/Shared/Capstone_final/Databricks/bronze_engine     --language PYTHON --format SOURCE
+          databricks workspace import Databricks/silver_engine.py     /Workspace/Shared/Capstone_final/Databricks/silver_engine     --language PYTHON --format SOURCE
+          databricks workspace import Databricks/gold_engine.py       /Workspace/Shared/Capstone_final/Databricks/gold_engine       --language PYTHON --format SOURCE
+          databricks workspace import Databricks/cdc_engine.py        /Workspace/Shared/Capstone_final/Databricks/cdc_engine        --language PYTHON --format SOURCE
       
       - name: Deploy Airflow DAGs to EC2
         env:
@@ -73,12 +85,15 @@ jobs:
           
           # Create Astro directories if they don't exist
           echo "=== Creating Astro Airflow directories ==="
-          ssh -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null $EC2_USER@$EC2_HOST "mkdir -p ~/Capstone/airflow/dags ~/Capstone/airflow/plugins/operators"
+          ssh -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null $EC2_USER@$EC2_HOST \
+            "mkdir -p ~/Capstone/airflow/dags ~/Capstone/airflow/plugins/operators"
           
           # Deploy DAGs
           echo "=== Deploying DAGs ==="
-          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null Airflow/dags/batch_pipeline.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/dags/
-          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null Airflow/dags/live_merge.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/dags/
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            Airflow/dags/batch_pipeline.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/dags/
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            Airflow/dags/live_merge.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/dags/
           rm ec2_key.pem
           echo "✅ DAGs deployed successfully"
       
@@ -90,9 +105,12 @@ jobs:
         run: |
           echo "$EC2_KEY_BASE64" | base64 -d > ec2_key.pem
           chmod 600 ec2_key.pem
-          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null Airflow/operators/databricks_operator.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/plugins/operators/
-          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null Airflow/operators/sns_operator.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/plugins/operators/
-          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null Airflow/plugins/__init__.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/plugins/operators/
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            Airflow/operators/databricks_operator.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/plugins/operators/
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            Airflow/operators/sns_operator.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/plugins/operators/
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            Airflow/plugins/__init__.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/plugins/operators/
           rm ec2_key.pem
           echo "✅ Operators deployed successfully"
       
