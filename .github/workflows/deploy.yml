@@ -44,33 +44,39 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          # Delete existing files first to avoid type mismatch
-          # Use names WITHOUT .py — that is how Databricks stores SOURCE format files
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/utils             || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/table_config      || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/bronze_engine     || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/silver_engine     || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/gold_engine       || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/cdc_engine        || true
-          # Also delete the old double-extension files if they exist
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/utils.py             || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/table_config.py      || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager.py || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/bronze_engine.py     || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/silver_engine.py     || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/gold_engine.py       || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/cdc_engine.py        || true
+          # Delete existing files — suppress errors if they don't exist yet
+          # Try both with and without .py suffix since old deploys may have left either
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/utils              2>/dev/null || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/table_config       2>/dev/null || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager 2>/dev/null || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/bronze_engine      2>/dev/null || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/silver_engine      2>/dev/null || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/gold_engine        2>/dev/null || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/cdc_engine         2>/dev/null || true
+
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/utils.py              2>/dev/null || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/table_config.py       2>/dev/null || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager.py 2>/dev/null || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/bronze_engine.py      2>/dev/null || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/silver_engine.py      2>/dev/null || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/gold_engine.py        2>/dev/null || true
+          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/cdc_engine.py         2>/dev/null || true
+
+          echo "✅ Cleanup done, uploading fresh files..."
+
           # Upload fresh files
           # Source path keeps .py (real file in repo)
-          # Destination path has NO .py — AUTO format does not append extension automatically
-          databricks workspace import Databricks/utils.py              /Workspace/Shared/Capstone_final/Databricks/utils              --language PYTHON --format AUTO
-          databricks workspace import Databricks/table_config.py       /Workspace/Shared/Capstone_final/Databricks/table_config       --language PYTHON --format AUTO
-          databricks workspace import Databricks/checkpoint_manager.py /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager --language PYTHON --format AUTO
-          databricks workspace import Databricks/bronze_engine.py      /Workspace/Shared/Capstone_final/Databricks/bronze_engine      --language PYTHON --format AUTO
-          databricks workspace import Databricks/silver_engine.py      /Workspace/Shared/Capstone_final/Databricks/silver_engine      --language PYTHON --format AUTO
-          databricks workspace import Databricks/gold_engine.py        /Workspace/Shared/Capstone_final/Databricks/gold_engine        --language PYTHON --format AUTO
-          databricks workspace import Databricks/cdc_engine.py         /Workspace/Shared/Capstone_final/Databricks/cdc_engine         --language PYTHON --format AUTO
+          # Destination path has NO .py — with SOURCE format, Databricks CLI adds .py automatically
+          # so the file lands as utils.py (one extension only)
+          databricks workspace import Databricks/utils.py              /Workspace/Shared/Capstone_final/Databricks/utils              --language PYTHON --format SOURCE --overwrite
+          databricks workspace import Databricks/table_config.py       /Workspace/Shared/Capstone_final/Databricks/table_config       --language PYTHON --format SOURCE --overwrite
+          databricks workspace import Databricks/checkpoint_manager.py /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager --language PYTHON --format SOURCE --overwrite
+          databricks workspace import Databricks/bronze_engine.py      /Workspace/Shared/Capstone_final/Databricks/bronze_engine      --language PYTHON --format SOURCE --overwrite
+          databricks workspace import Databricks/silver_engine.py      /Workspace/Shared/Capstone_final/Databricks/silver_engine      --language PYTHON --format SOURCE --overwrite
+          databricks workspace import Databricks/gold_engine.py        /Workspace/Shared/Capstone_final/Databricks/gold_engine        --language PYTHON --format SOURCE --overwrite
+          databricks workspace import Databricks/cdc_engine.py         /Workspace/Shared/Capstone_final/Databricks/cdc_engine         --language PYTHON --format SOURCE --overwrite
+
+          echo "✅ Python files deployed successfully"
       
       - name: Deploy Airflow DAGs to EC2
         env:
