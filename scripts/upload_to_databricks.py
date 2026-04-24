@@ -1,7 +1,7 @@
 """
 upload_to_databricks.py
 Uploads local .py files to Databricks workspace as RAW Python files (not notebooks).
-Deletes any existing notebook at the path before uploading.
+Deletes any existing object at both path/name and path/name.py before uploading.
 """
 
 import base64
@@ -30,25 +30,32 @@ def api_post(host: str, token: str, endpoint: str, payload: dict):
         return e.code, e.read().decode("utf-8")
 
 
-def delete(remote_path: str, host: str, token: str):
-    """Delete a workspace object if it exists — ignore 404."""
+def delete_if_exists(remote_path: str, host: str, token: str):
+    """Try to delete a workspace path, silently ignore if not found."""
     status, body = api_post(host, token, "/api/2.0/workspace/delete", {
         "path": remote_path,
         "recursive": False
     })
     if status == 200:
-        print(f"  Deleted existing object at {remote_path}")
-    elif status in (404, 400) or "RESOURCE_DOES_NOT_EXIST" in body:
-        print(f"  Nothing to delete at {remote_path}")
+        print(f"  Deleted: {remote_path}")
     else:
-        print(f"  Warning: delete returned HTTP {status}: {body}")
+        print(f"  Not found (skip): {remote_path}")
 
 
 def upload(local_path: str, remote_path: str, host: str, token: str):
+    """
+    remote_path should include .py extension e.g. .../utils.py
+    We delete both .../utils and .../utils.py before uploading
+    because Databricks may have stored a prior notebook under either name.
+    """
     print(f"Uploading {local_path} -> {remote_path}")
 
-    # Always delete first — clears any existing notebook or file type mismatch
-    delete(remote_path, host, token)
+    # Delete the path without .py (notebook stored by old databricks-cli)
+    path_no_ext = remote_path.removesuffix(".py")
+    delete_if_exists(path_no_ext, host, token)
+
+    # Delete the path with .py (in case a previous RAW upload left it)
+    delete_if_exists(remote_path, host, token)
 
     with open(local_path, "rb") as f:
         content = base64.b64encode(f.read()).decode("utf-8")
@@ -62,7 +69,7 @@ def upload(local_path: str, remote_path: str, host: str, token: str):
     })
 
     if status == 200:
-        print(f"  OK")
+        print(f"  OK\n")
     else:
         print(f"  FAILED HTTP {status}: {body}")
         sys.exit(1)
@@ -77,7 +84,7 @@ def main():
         sys.exit(1)
 
     host = host.removeprefix("https://").removeprefix("http://").rstrip("/")
-    print(f"Target host: {host}")
+    print(f"Target host: {host}\n")
 
     base = "/Workspace/Shared/Capstone_final/Databricks"
 
@@ -94,7 +101,7 @@ def main():
     for local, remote in files:
         upload(local, remote, host, token)
 
-    print("\nAll Python files deployed successfully")
+    print("All Python files deployed successfully")
 
 
 if __name__ == "__main__":
