@@ -66,25 +66,25 @@ jobs:
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
-          EC2_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_KEY_BASE64: ${{ secrets.EC2_SSH_KEY_BASE64 }}
         run: |
-          echo "$EC2_KEY" > ec2_key.pem
+          echo "$EC2_KEY_BASE64" | base64 -d > ec2_key.pem
           chmod 600 ec2_key.pem
-          scp -i ec2_key.pem -o StrictHostKeyChecking=no Airflow/dags/batch_pipeline.py $EC2_USER@$EC2_HOST:~/airflow/dags/
-          scp -i ec2_key.pem -o StrictHostKeyChecking=no Airflow/dags/live_merge.py $EC2_USER@$EC2_HOST:~/airflow/dags/
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null Airflow/dags/batch_pipeline.py $EC2_USER@$EC2_HOST:~/airflow/dags/
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null Airflow/dags/live_merge.py $EC2_USER@$EC2_HOST:~/airflow/dags/
           rm ec2_key.pem
       
       - name: Deploy Airflow Operators to EC2
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
-          EC2_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_KEY_BASE64: ${{ secrets.EC2_SSH_KEY_BASE64 }}
         run: |
-          echo "$EC2_KEY" > ec2_key.pem
+          echo "$EC2_KEY_BASE64" | base64 -d > ec2_key.pem
           chmod 600 ec2_key.pem
-          scp -i ec2_key.pem -o StrictHostKeyChecking=no Airflow/operators/databricks_operator.py $EC2_USER@$EC2_HOST:~/airflow/plugins/operators/
-          scp -i ec2_key.pem -o StrictHostKeyChecking=no Airflow/operators/sns_operator.py $EC2_USER@$EC2_HOST:~/airflow/plugins/operators/
-          scp -i ec2_key.pem -o StrictHostKeyChecking=no Airflow/plugins/__init__.py $EC2_USER@$EC2_HOST:~/airflow/plugins/operators/
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null Airflow/operators/databricks_operator.py $EC2_USER@$EC2_HOST:~/airflow/plugins/operators/
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null Airflow/operators/sns_operator.py $EC2_USER@$EC2_HOST:~/airflow/plugins/operators/
+          scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null Airflow/plugins/__init__.py $EC2_USER@$EC2_HOST:~/airflow/plugins/operators/
           rm ec2_key.pem
       
       - name: Run Snowflake SQL Scripts
