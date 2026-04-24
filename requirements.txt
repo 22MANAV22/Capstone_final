@@ -1,7 +1,6 @@
-apache-airflow==2.8.0
-apache-airflow-providers-databricks
-apache-airflow-providers-amazon
-apache-airflow-providers-snowflake
+# Minimal requirements for CI/CD
+# Full Airflow installation not needed - we only deploy files
+
 databricks-cli
 snowflake-connector-python
 pytest
