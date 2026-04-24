@@ -38,42 +38,87 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           databricks workspace import_dir Databricks/Notebooks /Workspace/Shared/Capstone_final/Databricks/Notebooks --overwrite
-      
+
+      - name: Remove Old Databricks Python Files
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          # Remove ALL variants of old files — notebooks, single extension, double extension
+          # Using workspace API delete — || true so pipeline never fails if file doesn't exist
+
+          for f in utils table_config checkpoint_manager bronze_engine silver_engine gold_engine cdc_engine; do
+            echo "Deleting old variants of ${f} ..."
+
+            # Delete notebook version (no extension — stored as notebook object)
+            curl --silent \
+              -X POST \
+              -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"path\": \"/Workspace/Shared/Capstone_final/Databricks/${f}\", \"recursive\": false}" \
+              "https://$DATABRICKS_HOST/api/2.0/workspace/delete" || true
+
+            # Delete single extension version (utils.py stored as notebook)
+            curl --silent \
+              -X POST \
+              -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"path\": \"/Workspace/Shared/Capstone_final/Databricks/${f}.py\", \"recursive\": false}" \
+              "https://$DATABRICKS_HOST/api/2.0/workspace/delete" || true
+
+            # Delete double extension version (utils.py.py)
+            curl --silent \
+              -X POST \
+              -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"path\": \"/Workspace/Shared/Capstone_final/Databricks/${f}.py.py\", \"recursive\": false}" \
+              "https://$DATABRICKS_HOST/api/2.0/workspace/delete" || true
+
+            # Delete via Files API as well (in case uploaded there before)
+            curl --silent \
+              -X DELETE \
+              -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+              "https://$DATABRICKS_HOST/api/2.0/fs/files/Shared/Capstone_final/Databricks/${f}.py" || true
+
+            echo "  ✅ ${f} old versions removed"
+          done
+
       - name: Deploy Databricks Python Files
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          # Delete existing files first to avoid type mismatch
-          # Use names WITHOUT .py — that is how Databricks stores SOURCE format files
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/utils || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/table_config || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/bronze_engine || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/silver_engine || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/gold_engine || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/cdc_engine || true
+          # Use Files API (PUT) to upload plain .py files
+          # Files API stores raw files — NOT notebooks — so Python can import them directly
+          # This avoids the "importing notebooks directly is not supported" error
 
-          # Also delete the old double-extension files if they exist
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/utils.py || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/table_config.py || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager.py || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/bronze_engine.py || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/silver_engine.py || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/gold_engine.py || true
-          databricks workspace delete /Workspace/Shared/Capstone_final/Databricks/cdc_engine.py || true
+          BASE_URL="https://$DATABRICKS_HOST/api/2.0/fs/files/Shared/Capstone_final/Databricks"
 
-          # Upload fresh files
-          # Source path keeps .py (real file in repo)
-          # Destination path has NO .py — Databricks CLI adds it automatically for SOURCE format
-          databricks workspace import Databricks/utils.py             /Workspace/Shared/Capstone_final/Databricks/utils             --language PYTHON --format SOURCE
-          databricks workspace import Databricks/table_config.py      /Workspace/Shared/Capstone_final/Databricks/table_config      --language PYTHON --format SOURCE
-          databricks workspace import Databricks/checkpoint_manager.py /Workspace/Shared/Capstone_final/Databricks/checkpoint_manager --language PYTHON --format SOURCE
-          databricks workspace import Databricks/bronze_engine.py     /Workspace/Shared/Capstone_final/Databricks/bronze_engine     --language PYTHON --format SOURCE
-          databricks workspace import Databricks/silver_engine.py     /Workspace/Shared/Capstone_final/Databricks/silver_engine     --language PYTHON --format SOURCE
-          databricks workspace import Databricks/gold_engine.py       /Workspace/Shared/Capstone_final/Databricks/gold_engine       --language PYTHON --format SOURCE
-          databricks workspace import Databricks/cdc_engine.py        /Workspace/Shared/Capstone_final/Databricks/cdc_engine        --language PYTHON --format SOURCE
-      
+          for f in utils table_config checkpoint_manager bronze_engine silver_engine gold_engine cdc_engine; do
+            echo "Uploading ${f}.py ..."
+            curl --silent --show-error --fail \
+              -X PUT \
+              -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"Databricks/${f}.py" \
+              "${BASE_URL}/${f}.py"
+            echo "  ✅ ${f}.py uploaded"
+          done
+
+          # Verify all files are present
+          echo ""
+          echo "=== Verifying uploaded files ==="
+          curl --silent \
+            -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+            "https://$DATABRICKS_HOST/api/2.0/fs/directories/Shared/Capstone_final/Databricks" \
+            | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          files = [f['path'] for f in data.get('contents', [])]
+          for f in files:
+              print(f'  {f}')
+          "
+
       - name: Deploy Airflow DAGs to EC2
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
@@ -85,7 +130,8 @@ jobs:
           
           # Create Astro directories if they don't exist
           echo "=== Creating Astro Airflow directories ==="
-          ssh -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null $EC2_USER@$EC2_HOST \
+          ssh -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            $EC2_USER@$EC2_HOST \
             "mkdir -p ~/Capstone/airflow/dags ~/Capstone/airflow/plugins/operators"
           
           # Deploy DAGs
