@@ -1,19 +1,26 @@
 """Databricks notebook execution wrapper — serverless compute."""
+import time
 from airflow.models import BaseOperator
 from airflow.providers.databricks.hooks.databricks import DatabricksHook
+
+
+# Terminal states from Databricks API
+TERMINAL_STATES = {"TERMINATED", "SKIPPED", "INTERNAL_ERROR"}
+SUCCESS_STATE = "SUCCESS"
 
 
 class DatabricksOperator(BaseOperator):
     """
     Runs a Databricks notebook on serverless compute.
-    Uses the /api/2.1/jobs/runs/submit endpoint with a tasks array
-    (required for serverless — single-task submit does not support serverless).
+    Uses /api/2.1/jobs/runs/submit with a tasks array (required for serverless).
+    Polls until the run reaches a terminal state.
     """
 
-    def __init__(self, notebook_path, base_parameters=None, **kwargs):
+    def __init__(self, notebook_path, base_parameters=None, poll_interval=30, **kwargs):
         super().__init__(**kwargs)
         self.notebook_path = notebook_path
         self.base_parameters = base_parameters or {}
+        self.poll_interval = poll_interval
 
     def execute(self, context):
         hook = DatabricksHook(databricks_conn_id="databricks_default")
@@ -27,24 +34,34 @@ class DatabricksOperator(BaseOperator):
                         "notebook_path": self.notebook_path,
                         "base_parameters": self.base_parameters,
                     },
-                    # No cluster spec = serverless compute
+                    # No cluster key = serverless compute
                 }
             ],
             "queue": {"enabled": True},
         }
 
         run_id = hook.submit_run(run_config)
-        self.log.info(f"Submitted Databricks run_id={run_id}")
+        self.log.info(f"Submitted Databricks run_id={run_id} for notebook {self.notebook_path}")
 
-        # Wait for completion
-        hook.wait_for_run(run_id, verbose=True)
+        # Poll until terminal state
+        while True:
+            run_info = hook.get_run(run_id)
+            life_cycle_state = run_info["state"]["life_cycle_state"]
+            result_state = run_info["state"].get("result_state", "")
+            state_message = run_info["state"].get("state_message", "")
 
-        run_state = hook.get_run_state(run_id)
-        self.log.info(f"Run state: {run_state}")
+            self.log.info(f"run_id={run_id} | state={life_cycle_state} | result={result_state} | msg={state_message}")
 
-        if not run_state.is_successful:
-            raise Exception(
-                f"Databricks notebook failed. run_id={run_id}, state={run_state}"
-            )
+            if life_cycle_state in TERMINAL_STATES:
+                if result_state == SUCCESS_STATE:
+                    self.log.info(f"Run {run_id} completed successfully.")
+                    return run_id
+                else:
+                    raise Exception(
+                        f"Databricks run failed. run_id={run_id}, "
+                        f"life_cycle_state={life_cycle_state}, "
+                        f"result_state={result_state}, "
+                        f"message={state_message}"
+                    )
 
-        return run_id
+            time.sleep(self.poll_interval)
