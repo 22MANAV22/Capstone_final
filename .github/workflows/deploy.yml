@@ -18,10 +18,15 @@ jobs:
         with:
           python-version: 3.9
       
-      - name: Install Dependencies
+      - name: Install System Dependencies
         run: |
-          pip install -r requirements.txt
-          pip install databricks-cli snowflake-connector-python pytest
+          sudo apt-get update
+          sudo apt-get install -y build-essential libre2-dev
+      
+      - name: Install Python Dependencies
+        run: |
+          pip install --upgrade pip setuptools wheel
+          pip install databricks-cli snowflake-connector-python pytest boto3
       
       - name: Run Tests
         run: |
