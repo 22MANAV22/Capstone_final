@@ -44,12 +44,12 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          # Helper function: upload a local .py file as a RAW plain Python file (not a notebook)
-          # Uses the Workspace REST API with format=RAW so Databricks stores it as a .py file,
-          # not a notebook object. base64-encodes the content and POSTs to /api/2.0/workspace/import.
+          # Strip any trailing slash from host to avoid double-slash in URL
+          DB_HOST="${DATABRICKS_HOST%/}"
+
           upload_py() {
-            local LOCAL_PATH=$1       # e.g. Databricks/utils.py
-            local REMOTE_PATH=$2      # e.g. /Workspace/Shared/.../utils.py  (include .py here for RAW)
+            local LOCAL_PATH=$1
+            local REMOTE_PATH=$2
 
             echo "Uploading $LOCAL_PATH → $REMOTE_PATH"
 
@@ -59,7 +59,7 @@ jobs:
               -X POST \
               -H "Authorization: Bearer $DATABRICKS_TOKEN" \
               -H "Content-Type: application/json" \
-              "$DATABRICKS_HOST/api/2.0/workspace/import" \
+              "${DB_HOST}/api/2.0/workspace/import" \
               -d "{
                 \"path\": \"$REMOTE_PATH\",
                 \"format\": \"RAW\",
@@ -68,9 +68,11 @@ jobs:
                 \"overwrite\": true
               }")
 
+            echo "HTTP status: $RESPONSE"
+            cat /tmp/db_response.json
+
             if [ "$RESPONSE" -ne 200 ]; then
               echo "❌ Failed to upload $LOCAL_PATH (HTTP $RESPONSE)"
-              cat /tmp/db_response.json
               exit 1
             fi
 
