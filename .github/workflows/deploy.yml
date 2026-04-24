@@ -8,30 +8,30 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-      
+
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.9
-      
+          python-version: "3.9"
+
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libre2-dev
-      
+
       - name: Install Python Dependencies
         run: |
           pip install --upgrade pip setuptools wheel
           pip install databricks-cli snowflake-connector-python pytest boto3
-      
+
       - name: Run Tests
         run: |
           echo "Skipping tests - Airflow not needed for file deployment"
-      
+
       - name: Deploy Databricks Notebooks
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -44,39 +44,28 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          # Remove ALL variants of old files — notebooks, single extension, double extension
-          # Using workspace API delete — || true so pipeline never fails if file doesn't exist
-
           for f in utils table_config checkpoint_manager bronze_engine silver_engine gold_engine cdc_engine; do
             echo "Deleting old variants of ${f} ..."
 
-            # Delete notebook version (no extension — stored as notebook object)
-            curl --silent \
-              -X POST \
+            curl --silent -X POST \
               -H "Authorization: Bearer $DATABRICKS_TOKEN" \
               -H "Content-Type: application/json" \
               -d "{\"path\": \"/Workspace/Shared/Capstone_final/Databricks/${f}\", \"recursive\": false}" \
               "https://$DATABRICKS_HOST/api/2.0/workspace/delete" || true
 
-            # Delete single extension version (utils.py stored as notebook)
-            curl --silent \
-              -X POST \
+            curl --silent -X POST \
               -H "Authorization: Bearer $DATABRICKS_TOKEN" \
               -H "Content-Type: application/json" \
               -d "{\"path\": \"/Workspace/Shared/Capstone_final/Databricks/${f}.py\", \"recursive\": false}" \
               "https://$DATABRICKS_HOST/api/2.0/workspace/delete" || true
 
-            # Delete double extension version (utils.py.py)
-            curl --silent \
-              -X POST \
+            curl --silent -X POST \
               -H "Authorization: Bearer $DATABRICKS_TOKEN" \
               -H "Content-Type: application/json" \
               -d "{\"path\": \"/Workspace/Shared/Capstone_final/Databricks/${f}.py.py\", \"recursive\": false}" \
               "https://$DATABRICKS_HOST/api/2.0/workspace/delete" || true
 
-            # Delete via Files API as well (in case uploaded there before)
-            curl --silent \
-              -X DELETE \
+            curl --silent -X DELETE \
               -H "Authorization: Bearer $DATABRICKS_TOKEN" \
               "https://$DATABRICKS_HOST/api/2.0/fs/files/Shared/Capstone_final/Databricks/${f}.py" || true
 
@@ -88,11 +77,7 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          # Use Files API (PUT) to upload plain .py files
-          # Files API stores raw files — NOT notebooks — so Python can import them directly
-          # This avoids the "importing notebooks directly is not supported" error
-
-          BASE_URL="https://$DATABRICKS_HOST/api/2.0/fs/files/Shared/Capstone_final/Databricks"
+          BASE_PATH="Shared/Capstone_final/Databricks"
 
           for f in utils table_config checkpoint_manager bronze_engine silver_engine gold_engine cdc_engine; do
             echo "Uploading ${f}.py ..."
@@ -101,23 +86,22 @@ jobs:
               -H "Authorization: Bearer $DATABRICKS_TOKEN" \
               -H "Content-Type: application/octet-stream" \
               --data-binary @"Databricks/${f}.py" \
-              "${BASE_URL}/${f}.py"
+              "https://$DATABRICKS_HOST/api/2.0/fs/files/${BASE_PATH}/${f}.py"
             echo "  ✅ ${f}.py uploaded"
           done
 
-          # Verify all files are present
           echo ""
           echo "=== Verifying uploaded files ==="
           curl --silent \
             -H "Authorization: Bearer $DATABRICKS_TOKEN" \
-            "https://$DATABRICKS_HOST/api/2.0/fs/directories/Shared/Capstone_final/Databricks" \
+            "https://$DATABRICKS_HOST/api/2.0/fs/directories/${BASE_PATH}" \
             | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          files = [f['path'] for f in data.get('contents', [])]
-          for f in files:
-              print(f'  {f}')
-          "
+import sys, json
+data = json.load(sys.stdin)
+files = [f['path'] for f in data.get('contents', [])]
+for f in files:
+    print(f'  {f}')
+"
 
       - name: Deploy Airflow DAGs to EC2
         env:
@@ -127,22 +111,20 @@ jobs:
         run: |
           echo "$EC2_KEY_BASE64" | base64 -d > ec2_key.pem
           chmod 600 ec2_key.pem
-          
-          # Create Astro directories if they don't exist
-          echo "=== Creating Astro Airflow directories ==="
+
           ssh -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             $EC2_USER@$EC2_HOST \
             "mkdir -p ~/Capstone/airflow/dags ~/Capstone/airflow/plugins/operators"
-          
-          # Deploy DAGs
-          echo "=== Deploying DAGs ==="
+
           scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             Airflow/dags/batch_pipeline.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/dags/
+
           scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             Airflow/dags/live_merge.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/dags/
+
           rm ec2_key.pem
           echo "✅ DAGs deployed successfully"
-      
+
       - name: Deploy Airflow Operators to EC2
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
@@ -151,15 +133,19 @@ jobs:
         run: |
           echo "$EC2_KEY_BASE64" | base64 -d > ec2_key.pem
           chmod 600 ec2_key.pem
+
           scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             Airflow/operators/databricks_operator.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/plugins/operators/
+
           scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             Airflow/operators/sns_operator.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/plugins/operators/
+
           scp -i ec2_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             Airflow/plugins/__init__.py $EC2_USER@$EC2_HOST:~/Capstone/airflow/plugins/operators/
+
           rm ec2_key.pem
           echo "✅ Operators deployed successfully"
-      
+
       - name: Run Snowflake SQL Scripts
         env:
           SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
