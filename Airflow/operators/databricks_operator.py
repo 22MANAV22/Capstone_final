@@ -8,13 +8,11 @@ from airflow.providers.databricks.hooks.databricks import DatabricksHook
 TERMINAL_STATES = {"TERMINATED", "SKIPPED", "INTERNAL_ERROR"}
 SUCCESS_STATE = "SUCCESS"
 
-
 class DatabricksOperator(BaseOperator):
-    """
-    Runs a Databricks notebook on serverless compute.
-    Uses /api/2.1/jobs/runs/submit with a tasks array (required for serverless).
-    Polls until the run reaches a terminal state.
-    """
+    
+    # ADD THESE TWO LINES — tells Airflow to render Jinja in these fields
+    template_fields = ("notebook_path", "base_parameters")
+    template_fields_renderers = {"base_parameters": "json"}
 
     def __init__(self, notebook_path, base_parameters=None, poll_interval=30, **kwargs):
         super().__init__(**kwargs)

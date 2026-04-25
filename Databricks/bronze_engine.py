@@ -1,10 +1,12 @@
 """
 Bronze Engine — refactored to use utils.py
 No DQ checks here — just ingestion.
+FIXED: Pass table_config to read_csv for proper schema handling
 """
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, to_timestamp
+from delta.tables import DeltaTable
 import utils
 from table_config import REFERENCE_TABLES, TRANSACTIONAL_TABLES
 from table_config import S3_RAW, S3_LIVE, S3_DELTA_BRONZE
@@ -23,22 +25,31 @@ class BronzeEngine:
                  write_mode="overwrite", partition=None):
 
         try:
-            df = utils.read_csv(self.spark, s3_source)
-            df = utils.apply_casts(df, table_config)
+            # FIXED: Pass table_config to read_csv for proper schema enforcement
+            df = utils.read_csv(self.spark, s3_source, table_config)
+            
+            # Apply any additional casts (now redundant but kept for safety)
+            # df = utils.apply_casts(df, table_config)
+            
+            # Add audit columns
             df = utils.add_audit_columns(df, s3_source.split('/')[-1], batch_id)
 
             s3_path = f"{S3_DELTA_BRONZE}/{table_name}"
             table_name_full = f"bronze.{table_name}"
 
-            # 🔥 NEW LOGIC (THIS FIXES YOUR ERROR)
+            # Check if path exists and is Delta
             path_exists = utils.path_exists(s3_path)
             is_delta = utils.is_delta_table(self.spark, s3_path)
 
             if path_exists and not is_delta:
                 print(f"⚠️ Non-delta data found at {s3_path}, cleaning...")
-                dbutils.fs.rm(s3_path, True)
+                try:
+                    dbutils.fs.rm(s3_path, True)
+                except:
+                    # If dbutils not available, skip cleanup
+                    pass
 
-            # ✅ WRITE
+            # Write Delta table
             utils.write_delta(
                 df,
                 s3_path,
@@ -81,9 +92,6 @@ class BronzeEngine:
         """Live ingestion (robust + schema-safe)."""
         print("\n  Live stream:")
 
-        from pyspark.sql.functions import col, to_timestamp
-        from delta.tables import DeltaTable
-
         for name, cfg in TRANSACTIONAL_TABLES.items():
             try:
                 print(f"\nProcessing live table: {name}")
@@ -91,10 +99,8 @@ class BronzeEngine:
                 # Read matching files
                 file_pattern = f"{S3_LIVE}/*{cfg['source_file']}*"
 
-                df = (self.spark.read
-                    .option("header", True)
-                    .option("inferSchema", False)
-                    .csv(file_pattern))
+                # FIXED: Use updated read_csv with config
+                df = utils.read_csv(self.spark, file_pattern, cfg)
 
                 count = df.count()
                 print(f"Row count: {count}")
@@ -103,20 +109,8 @@ class BronzeEngine:
                     print(f"⚠️ No data found for {name}, skipping...")
                     continue
 
-                # Apply transformations
+                # Apply base transformations
                 df = utils.apply_casts(df, cfg)
-
-                # Schema enforcement
-                for col_name, dtype in cfg.get("schema", {}).items():
-                    if col_name in df.columns:
-                        if "timestamp" in dtype.lower():
-                            df = df.withColumn(col_name, to_timestamp(col(col_name)))
-                        elif dtype.lower() in ["int", "integer"]:
-                            df = df.withColumn(col_name, col(col_name).cast("int"))
-                        elif dtype.lower() in ["double", "float"]:
-                            df = df.withColumn(col_name, col(col_name).cast("double"))
-                        else:
-                            df = df.withColumn(col_name, col(col_name).cast(dtype))
 
                 # Add audit columns
                 df = utils.add_audit_columns(df, cfg['source_file'], "live_stream")
@@ -124,7 +118,7 @@ class BronzeEngine:
                 table_name_full = f"bronze.{name}"
                 s3_path = f"{S3_DELTA_BRONZE}/{name}"
 
-                # FIX: Check if Delta table exists at S3 path (not catalog)
+                # Check if Delta table exists at S3 path (not catalog)
                 if DeltaTable.isDeltaTable(self.spark, s3_path):
                     print(f"Appending to existing Delta table: {table_name_full}")
                     
@@ -156,7 +150,6 @@ class BronzeEngine:
                 utils.log_error(name, e)
                 self.errors.append(name)
 
-
     def run(self, batch_number):
         """Main entry point."""
         utils.log_stage("BRONZE ENGINE", batch_number)
@@ -183,4 +176,3 @@ class BronzeEngine:
                 print(f"\nWARNING: {len(self.errors)} tables failed — checkpoint NOT written")
 
         utils.log_summary("BRONZE", self.results, self.errors)
-

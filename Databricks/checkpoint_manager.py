@@ -1,54 +1,54 @@
 """
-checkpoint_manager.py — Track which Bronze batches have already been ingested.
+checkpoint_manager.py — Track which batches have been processed
 
-Checkpoints are tiny JSON files written to S3 after each successful
-Bronze ingestion. Before Bronze runs, it checks if a checkpoint exists
-for that batch — if yes, it skips ingestion entirely.
-
-FIX for PATH_NOT_FOUND:
-  spark.read.text() throws an exception when the path does not exist.
-  The old code caught all exceptions and returned False, but Databricks
-  raises PATH_NOT_FOUND as an AnalysisException before the read even starts.
-  The fix is to use dbutils.fs.ls() to check existence first — it returns
-  an empty list or raises when the path is missing, without a Spark job.
-  Only if the file exists do we read and parse it.
+FIX: Handles missing checkpoint files gracefully on first run
+Works with both dbutils (Databricks) and without (local testing)
 """
 
 import json
 from datetime import datetime, timezone
-from table_config import S3_BUCKET, S3_PROTOCOL
 
 
 class CheckpointManager:
 
     def __init__(self, spark):
         self.spark = spark
-        self.base  = f"{S3_PROTOCOL}://{S3_BUCKET}/checkpoints"
+        self.base = "s3://capstone-ecomm-team8/checkpoints"
 
     def _path(self, batch_number, stage):
         """Return the full S3 path for a checkpoint file."""
         return f"{self.base}/batch_{batch_number}/{stage}.json"
 
     def _file_exists(self, path):
-        """
-        Check if an S3 path exists without triggering a Spark job.
-        dbutils.fs.ls() raises an exception when the path is missing —
-        we catch that and return False. This avoids PATH_NOT_FOUND from
-        spark.read when the checkpoint hasn't been written yet.
-        """
+        """Check if file exists using dbutils if available, otherwise assume not exists"""
         try:
+            # Try using dbutils (Databricks)
             files = dbutils.fs.ls(path)
-            # ls on a file returns a list with one entry — check it's not empty
             return len(files) > 0
+        except NameError:
+            # dbutils not available (local mode or serverless without dbutils)
+            # Try reading directly and catch exception
+            try:
+                df = self.spark.read.text(path)
+                df.first()
+                return True
+            except:
+                return False
         except Exception:
-            # Path does not exist — no checkpoint written yet
+            # Path doesn't exist
             return False
 
     def is_done(self, batch_number, stage):
+        """Check if this batch+stage has been completed"""
         path = self._path(batch_number, stage)
 
+        # First check if file exists
+        if not self._file_exists(path):
+            print(f"    No checkpoint found for batch_{batch_number}/{stage} — will run.")
+            return False
+
         try:
-            df = self.spark.read.text(path)  # 👈 try directly
+            df = self.spark.read.text(path)
             content = df.first()[0]
             data = json.loads(content)
 
@@ -60,58 +60,59 @@ class CheckpointManager:
                 print(f"    Already completed at {completed_at} with {rows:,} rows.")
                 return True
 
-        except Exception:
-            print(f"    No checkpoint found for batch_{batch_number}/{stage} — will run.")
+        except Exception as e:
+            print(f"    Checkpoint file exists but couldn't read it: {e}")
             return False
 
         return False
 
     def mark_done(self, batch_number, stage, rows=0):
-        """
-        Write a checkpoint file to S3 marking this stage as completed.
-        Called immediately after a successful stage run.
-        """
+        """Mark this batch+stage as completed"""
         path = self._path(batch_number, stage)
+        
         data = {
-            "batch"        : str(batch_number),
-            "stage"        : stage,
-            "status"       : "completed",
-            "rows"         : rows,
-            "completed_at" : datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "batch": str(batch_number),
+            "stage": stage,
+            "status": "completed",
+            "rows": rows,
+            "completed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
+        
         content_df = self.spark.createDataFrame(
             [(json.dumps(data),)], ["value"]
         )
+        
         content_df.coalesce(1).write.mode("overwrite").text(path)
         print(f"    Checkpoint saved: batch_{batch_number}/{stage} ({rows:,} rows)")
 
-    def reset(self, batch_number, stage="bronze"):
-        """
-        Delete a checkpoint to force that stage to re-run next time.
+    def clear(self, batch_number, stage):
+        """Delete a checkpoint to force re-run (alias for reset)"""
+        self.reset(batch_number, stage)
 
-        Usage from a Databricks notebook:
-          from checkpoint_manager import CheckpointManager
-          CheckpointManager(spark).reset("2")
-        """
+    def reset(self, batch_number, stage="bronze"):
+        """Delete a checkpoint to force re-run"""
         path = self._path(batch_number, stage)
+        
         try:
+            # Try dbutils first
             dbutils.fs.rm(path, recurse=True)
-            print(f"Checkpoint deleted: {path}")
-            print(f"Next Bronze run for batch_{batch_number} will re-ingest.")
+            print(f"  ✓ Checkpoint deleted: batch_{batch_number}/{stage}")
+        except NameError:
+            # dbutils not available
+            print(f"  ⚠️ Cannot delete checkpoint - dbutils not available")
+            print(f"     Manually delete: {path}")
         except Exception as e:
-            print(f"Could not delete checkpoint {path}: {e}")
+            # Checkpoint doesn't exist - that's OK
+            print(f"  ⚠️ No checkpoint to delete for batch_{batch_number}/{stage} (OK)")
 
     def list_all(self):
-        """
-        Print a summary of all existing checkpoints.
-        Useful for a quick health check before running the pipeline.
-
-        Usage from a Databricks notebook:
-          from checkpoint_manager import CheckpointManager
-          CheckpointManager(spark).list_all()
-        """
+        """Print summary of all checkpoints"""
         try:
+            # Try dbutils
             batch_folders = dbutils.fs.ls(f"{self.base}/")
+        except NameError:
+            print("dbutils not available - cannot list checkpoints")
+            return
         except Exception:
             print("No checkpoints found. Pipeline has not run yet.")
             return
@@ -127,7 +128,7 @@ class CheckpointManager:
                         continue
                     try:
                         content = self.spark.read.text(sf.path).first()[0]
-                        data    = json.loads(content)
+                        data = json.loads(content)
                         print(
                             f"{data.get('batch','?'):<10} "
                             f"{data.get('stage','?'):<12} "

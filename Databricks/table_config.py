@@ -104,10 +104,21 @@ REFERENCE_TABLES = {
 
 
 # ── Transactional tables (append new batches, grow over time) ─────────────────
+# ── Transactional tables (append new batches, grow over time) ─────────────────
 TRANSACTIONAL_TABLES = {
 
     "orders": {
         "source_file"   : "orders_dataset.csv",
+        "schema": {
+            "order_id": "string",
+            "customer_id": "string",
+            "order_status": "string",
+            "order_purchase_timestamp": "timestamp",
+            "order_approved_at": "timestamp",
+            "order_delivered_carrier_date": "timestamp",
+            "order_delivered_customer_date": "timestamp",
+            "order_estimated_delivery_date": "timestamp"
+        },
         "cleaning_rules": [
             {"column": "order_purchase_timestamp",       "action": "to_timestamp"},
             {"column": "order_approved_at",              "action": "to_timestamp"},
@@ -121,9 +132,20 @@ TRANSACTIONAL_TABLES = {
 
     "order_items": {
         "source_file"   : "order_items_dataset.csv",
+        "schema": {
+            "order_id": "string",
+            "order_item_id": "int",
+            "product_id": "string",
+            "seller_id": "string",
+            "shipping_limit_date": "timestamp",
+            "price": "double",
+            "freight_value": "double"
+        },
         "cleaning_rules": [
-            {"column": "price",         "action": "cast_double"},
-            {"column": "freight_value", "action": "cast_double"},
+            {"column": "order_item_id",      "action": "cast_int"},
+            {"column": "shipping_limit_date", "action": "to_timestamp"},
+            {"column": "price",              "action": "cast_double"},
+            {"column": "freight_value",      "action": "cast_double"},
         ],
         "merge_keys": ["order_id", "order_item_id"],
         "dedup_keys": ["order_id", "order_item_id"],
@@ -131,25 +153,43 @@ TRANSACTIONAL_TABLES = {
 
     "order_payments": {
         "source_file"   : "order_payments_dataset.csv",
+        "schema": {
+            "order_id": "string",
+            "payment_sequential": "int",
+            "payment_type": "string",
+            "payment_installments": "int",
+            "payment_value": "double"
+        },
         "cleaning_rules": [
-            # "not_defined" in the raw data — replace with a clean unknown label
-            {"column": "payment_type",         "action": "replace_value", "old": "not_defined", "new": "unknown"},
-            {"column": "payment_value",        "action": "cast_double"},
+            {"column": "payment_sequential",   "action": "cast_int"},
             {"column": "payment_installments", "action": "cast_int"},
+            {"column": "payment_value",        "action": "cast_double"},
+            {"column": "payment_type",         "action": "replace_value", "old": "not_defined", "new": "unknown"},
         ],
         "merge_keys": ["order_id", "payment_sequential"],
         "dedup_keys": [],
     },
 
     "order_reviews": {
-    "source_file"   : "order_reviews_dataset.csv",
-    "cleaning_rules": [
-        {"column": "review_score",             "action": "cast_int"},
-        {"column": "review_comment_title",     "action": "fill_null", "default": ""},
-        {"column": "review_comment_message",   "action": "fill_null", "default": ""},
-    ],
-    "merge_keys": ["review_id"],
-    "dedup_keys": ["review_id"],
+        "source_file"   : "order_reviews_dataset.csv",
+        "schema": {
+            "review_id": "string",
+            "order_id": "string",
+            "review_score": "int",
+            "review_comment_title": "string",
+            "review_comment_message": "string",
+            "review_creation_date": "timestamp",
+            "review_answer_timestamp": "timestamp"
+        },
+        "cleaning_rules": [
+            {"column": "review_score",             "action": "cast_int"},
+            {"column": "review_comment_title",     "action": "fill_null", "default": ""},
+            {"column": "review_comment_message",   "action": "fill_null", "default": ""},
+            {"column": "review_creation_date",     "action": "to_timestamp"},
+            {"column": "review_answer_timestamp",  "action": "to_timestamp"},
+        ],
+        "merge_keys": ["review_id"],
+        "dedup_keys": ["review_id"],
     },
 }
 
