@@ -4,14 +4,13 @@ Cleaning rules run BEFORE schema enforcement to handle type conversions properly
 """
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col
 from pyspark.sql.types import IntegerType, DoubleType, StringType, TimestampType
 from delta.tables import DeltaTable
 import utils
 from table_config import REFERENCE_TABLES, TRANSACTIONAL_TABLES
 from table_config import S3_DELTA_BRONZE, S3_DELTA_SILVER
 from checkpoint_manager import CheckpointManager
-
+from pyspark.sql.functions import col, when, lit
 
 class SilverEngine:
 
@@ -220,10 +219,30 @@ class SilverEngine:
 
                 # CRITICAL: Clean BEFORE schema enforcement
                 # This allows to_timestamp and cast_* actions to run first
+                # CRITICAL: Clean BEFORE schema enforcement
                 df = self._clean_table(df, config)
-                
+
                 # Then enforce schema on remaining columns
                 df = self._enforce_schema(df, table_name, config)
+
+                # Execute join if configured (e.g. products → category_translation)
+                join_cfg = config.get("join")
+                if join_cfg:
+                    join_table = join_cfg["source_table"]
+                    join_path = f"{S3_DELTA_SILVER}/{join_table}"
+                    if DeltaTable.isDeltaTable(self.spark, join_path):
+                        print(f"    Joining {table_name} with {join_table}...")
+                        join_df = utils.read_delta(self.spark, join_path)
+                        df = df.join(join_df, on=join_cfg["on"], how=join_cfg.get("how", "left"))
+                        # Fill nulls on columns specified in fill_after
+                        for fill_col, default in join_cfg.get("fill_after", {}).items():
+                            if fill_col in df.columns:
+                                df = df.withColumn(fill_col,
+                                    when(col(fill_col).isNull(), lit(default))
+                                    .otherwise(col(fill_col)))
+                        print(f"    ✓ Join complete, {utils.get_row_count(df):,} rows")
+                    else:
+                        print(f"    ⚠️ Join source {join_table} not found in Silver yet — skipping join")
 
                 # Write with merge if merge keys defined, otherwise overwrite
                 merge_keys = config.get("merge_keys", [])

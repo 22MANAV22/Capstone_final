@@ -97,7 +97,14 @@ def write_delta(df, s3_path, mode="overwrite", partition_by=None, catalog_table=
         else:
             writer.option("overwriteSchema", "true").save(s3_path)  # ← AND HERE
             
-
+def write_parquet(df, s3_path):
+    """Write DataFrame as Parquet for Snowflake ingestion."""
+    (df.write
+        .mode("overwrite")
+        .option("compression", "snappy")
+        .parquet(s3_path))
+    print(f"  ✓ Parquet written to {s3_path}")
+    
 def register_catalog(spark, catalog_table, s3_path):
     """Register Delta table in Unity Catalog"""
     spark.sql(f"""

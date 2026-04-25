@@ -62,16 +62,16 @@ class GoldEngine:
         items = utils.read_delta(self.spark, f"{S3_DELTA_SILVER}/order_items")
         payments = utils.read_delta(self.spark, f"{S3_DELTA_SILVER}/order_payments")
         reviews = utils.read_delta(self.spark, f"{S3_DELTA_SILVER}/order_reviews")
-        
+
         pay_agg = payments.groupBy("order_id").agg(
             _sum("payment_value").alias("payment_value"),
             _avg("payment_installments").alias("avg_installments")
         )
-        
+
         rev_agg = reviews.groupBy("order_id").agg(
             _avg("review_score").alias("review_score")
         )
-        
+
         fact = (items.join(orders, "order_id")
                     .join(pay_agg, "order_id", "left")
                     .join(rev_agg, "order_id", "left")
@@ -84,13 +84,20 @@ class GoldEngine:
                         col("order_delivered_customer_date").alias("delivered_date"),
                         "order_estimated_delivery_date",
                         col("review_score").alias("review_score"),
-                        datediff(col("order_delivered_customer_date"),
-                                col("order_purchase_timestamp")).alias("delivery_days"),
+                        datediff(
+                            col("order_delivered_customer_date"),
+                            col("order_purchase_timestamp")
+                        ).alias("delivery_days"),
+                        # EXISTING
                         when(col("order_delivered_customer_date").isNull(), None)
                         .when(col("order_delivered_customer_date") > col("order_estimated_delivery_date"), 1)
-                        .otherwise(0).alias("delay_flag")
+                        .otherwise(0).alias("delay_flag"),
+                        # NEW — on_time_flag (inverse of delay, null when not delivered)
+                        when(col("order_delivered_customer_date").isNull(), None)
+                        .when(col("order_delivered_customer_date") <= col("order_estimated_delivery_date"), 1)
+                        .otherwise(0).alias("on_time_flag")
                     ))
-        
+
         self._write_gold(fact, "fact_order_items")
 
     def build_order_summary(self):
@@ -132,6 +139,9 @@ class GoldEngine:
             _sum("price").alias("total_revenue"),
             _avg("review_score").alias("avg_review_score"),
             _avg("delivery_days").alias("avg_delivery_days"),
+            # NEW — on_time_delivery_rate as a percentage
+            (_sum(when(col("on_time_flag") == 1, 1).otherwise(0)) * 100.0 / count("*"))
+                .alias("on_time_delivery_rate"),
         )
         self._write_gold(df, "seller_performance")
 
